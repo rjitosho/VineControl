@@ -5,7 +5,7 @@ function change_units_Z(vine, Z; scale = .001)
     return Z .* repeat([scale;scale;1],outer = (2*vine.nb,N))
 end
 
-function visualize!(m::SimpleVine,Z)
+function visualize!(m::SimpleVine,Z,dt)
     _, N = size(Z)
     diam = m.diam/1000 # tube diameter
     d = m.d/1000
@@ -27,7 +27,7 @@ function visualize!(m::SimpleVine,Z)
         end
     end
 
-    anim = MeshCat.Animation(Int(1/m.Δt))
+    anim = MeshCat.Animation(Int(1/dt))
     for k = 1:N
         atframe(anim, (k-1)) do
             for i = 1:nb

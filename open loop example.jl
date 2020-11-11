@@ -9,8 +9,8 @@ using Plots
 const TO = TrajectoryOptimization
 const RD = RobotDynamics
 
-include("SimpleVine.jl")
-include("visualize.jl")
+include("models/SimpleVine.jl")
+include("src/visualize.jl")
 
 # Create the model
 model = SimpleVine(2, d=100., m_b = .0001, J_b = 1.0, stiffness = 500., damping=100.)
@@ -31,13 +31,13 @@ dt = .005
 
 for k = 2:N
     global Z
-    print(".")
     Z[:,k] = discrete_dynamics(PassThrough, model, SVector{model.n}(Z[:,k-1]),  SVector{model.m}(U[:,k-1]), 0, dt)
+    println(maximum(abs.(model.c)))
 end
 
 # visualize
 Z_meters = change_units_Z(model, Z)
-# visualize!(model, Z_meters)
+# visualize!(model, Z_meters, dt)
 
 # plot angles and velocity
 plot(Z[3:3:end,:]')

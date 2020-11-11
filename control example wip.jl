@@ -9,11 +9,11 @@ using Plots
 const TO = TrajectoryOptimization
 const RD = RobotDynamics
 
-include("SimpleVine.jl")
-include("visualize.jl")
+include("models/SimpleVine.jl")
+include("src/visualize.jl")
 
 # Create the model
-model = SimpleVine(2, d=100., m_b = .0001, J_b = 1.0, stiffness = 500., damping=100., Δt = .005)
+model = SimpleVine(2, d=100., m_b = .0001, J_b = 1.0, stiffness = 500., damping=100.)
 n,m = size(model)
 
 # Generate initial state
