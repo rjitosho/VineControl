@@ -10,7 +10,7 @@ const TO = TrajectoryOptimization
 const RD = RobotDynamics
 
 include("models/SimpleVine.jl")
-include("src/visualize.jl")
+# include("src/visualize.jl")
 
 # Create the model
 model = SimpleVine(2, d=100., m_b = .0001, J_b = 1.0, stiffness = 500., damping=100.)
@@ -30,9 +30,7 @@ U = 100*ones(model.m, N-1)
 dt = .005
 
 for k = 2:N
-    global Z
     Z[:,k] = discrete_dynamics(PassThrough, model, SVector{model.n}(Z[:,k-1]),  SVector{model.m}(U[:,k-1]), 0, dt)
-    println(maximum(abs.(model.c)))
 end
 
 # visualize

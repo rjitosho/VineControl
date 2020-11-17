@@ -40,9 +40,10 @@ function SimpleVine(links;              # number of pin joints
     n = 2*nq    # state size
     m = nb      # control size
 
+    # Mass matrix
     M = Diagonal(SVector{3*nb}( repeat([m_b; m_b; J_b]; outer = [nb])))
-    # MInv = Diagonal(SVector{3*nb}( repeat([1/m_b; 1/m_b; 1/J_b]; outer = [nb])))
 
+    # Map pin joint torque to maximal coordinates
     R = zeros(3*nb, nb)
     R[3,1] = 1
     for i = 1:nb-1
@@ -50,18 +51,21 @@ function SimpleVine(links;              # number of pin joints
         R[3*i+3,i+1] = 1
     end
 
+    # Stiffness and damping matrices
     K = Diagonal(stiffness*ones(links)) 
     C = Diagonal(damping*ones(links))
 
+    # Map configuration to pin joint angles
     D = zeros(nb, nq)
     [D[i,3*i]=1 for i=1:nb]
     [D[i+1,3*i]=-1 for i=1:nb-1]
 
+    # Map body torque to maximal coordinates
     B = zeros(nq, nb)
     [B[3*i,i]=1 for i=1:nb]
 
+    # Allocate matrices for dynamics
     Fext = zeros(nq)
-
     J = zeros(nc, nq)
     c = zeros(nc)
     λ = zeros(nc)
@@ -70,11 +74,11 @@ function SimpleVine(links;              # number of pin joints
     function c!(c,q)
         nc = length(c)
 
-        # base pin
+        # Base pin
         c[1] = q[1] - d*cos(q[3])
         c[2] = q[2] - d*sin(q[3])
 
-        # pin elements
+        # Pin elements
         for i=2:Int(nc/2)
             x1 = q[3*i-5]
             y1 = q[3*i-4]
@@ -94,8 +98,27 @@ end
 RobotDynamics.state_dim(vine::SimpleVine) = vine.n
 RobotDynamics.control_dim(vine::SimpleVine) = vine.m
 
+# Compute maximal coordinate configuration given joint angles
+function generate_config(model, angles)
+    # Compute pin joint locations
+    x = zeros(1)
+    y = zeros(1)
+    for i = 1:model.nb
+        θ = angles[i]
+        x = [x; x[end] + 2 * model.d * cos(θ)]
+        y = [y; y[end] + 2 * model.d * sin(θ)]
+    end
+
+    # Compute center of mass and orientation
+    θ = atan.(y[2:end] - y[1:end-1], x[2:end] - x[1:end-1])
+    x = (x[1:end-1] + x[2:end])/2
+    y = (y[1:end-1] + y[2:end])/2
+
+    return vec([x y θ]')
+end
+
 function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine, x::StaticVector, u::StaticVector, t, dt)
-    # unpack and allocate
+    # Unpack and allocate
     nc = model.nc
     nq = model.nq
 
@@ -110,52 +133,65 @@ function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine,
     q = x[1:nq]
     v = x[nq+1:end]
 
-    J = zeros(eltype(x), size(model.J))
-    c = zeros(eltype(x), size(model.c))
+    F = model.Fext
+    J = model.J
+    c = model.c
+    λ = model.λ
+
     c! = model.c!
 
-    # joint angles and angular velocities
-    θall = D*q #q[3:3:end] - [model.θ0; q[3:3:end-3]]
+    # If called by ForwardDiff
+    if !(eltype(x) <: Float64)
+        F = zeros(eltype(x), size(model.Fext))
+        J = zeros(eltype(x), size(model.J))
+        c = zeros(eltype(x), size(model.c))
+        λ = zeros(eltype(x), size(model.λ))
+    end
+
+    # Joint angles and angular velocities
+    θall = D*q 
     θall[1] -= θ0
-    θdall = D*v #v[3:3:end] - [0; v[3:3:end-3]]
+    θdall = D*v 
 
-    # external impulse
-    F = -R * (K*θall + C*θdall) + B * u 
-    F *= dt # compute impulse
+    # External impulse
+    F .= (-R*(K*θall + C*θdall) + B*u)*dt
 
-    # set initial guess to q_k, v_k
+    # Set initial guess to q_k, v_k
     v⁺ = copy(v)
     q⁺ = copy(q)
-    λ = zeros(eltype(x), size(model.λ))
 
-    for i=1:3
-        # joint constraints
+    # Solve for next state
+    max_iters = 10
+    for i=1:max_iters
+        # Joint constraints
         c!(c,q⁺)
         ForwardDiff.jacobian!(J, c!, ones(eltype(x), nc), q⁺)
+        
+        # Check break condition
+        f = M*(v⁺-v) - J'*λ - F
+        if norm([f;c]) < 1e-12
+            println("breaking at iter: $i")
+            break
+        end
+        i == max_iters && @warn "Max iters reached"
 
         # Newton solve
         A = [M -J';
             -J zeros(nc, nc)]
         b = [M*v + F; 
             (c + J*(q-q⁺))/dt]
-
-        # Unpack
         sol = A\b
+
+        # Update        
         v⁺ = sol[1:nq]
-        λ = sol[nq+1:end]
+        λ .= sol[nq+1:end]
         q⁺ = q + v⁺*dt
     end
 
-    # store values
-    if eltype(x) <: Float64
-        model.J .= J
-        model.c .= c
-        model.λ .= λ
-    end
     return [q⁺; v⁺]
 end
 
-function discrete_jacobian(model::SimpleVine, x_next, z, dt)
+function discrete_jacobian(model::SimpleVine, J, λ, x_next, z, dt)
     # Unpack
     n, m = size(model)
     x = z[1:n]
@@ -171,57 +207,35 @@ function discrete_jacobian(model::SimpleVine, x_next, z, dt)
     D = model.D
     B = model.B
     M = model.M
-    J = model.J
-    λ = model.λ
     c! = model.c!
-
-    # partial J / partial q_k+1
+    
+    # Partial (J'*λ) / partial q_k+1
     function JTλ(q)
-        J_tmp = zeros(eltype(q), size(J))
-        ForwardDiff.jacobian!(J_tmp, c!, ones(eltype(q), nc), q)
+        J_tmp = ForwardDiff.jacobian(c!, ones(eltype(q), nc), q)
         return J_tmp'*λ
     end
-    J_q = zeros(nq, nq)
-    ForwardDiff.jacobian!(J_q, JTλ, x_next[1:nq])
+    J_q = ForwardDiff.jacobian(JTλ, x_next[1:nq])
 
-    # partial g / partial v_k+1 and λ
-    dg_dv⁺ = [M-J_q*dt -J';
-            J*dt zeros(nc,nc)]
-
-    # partial g / partial z_k
+    # Partial f / partial z_k
     df_dq = R*K*D*dt - J_q
     df_dv = R*C*D*dt - M
     df_du = -B*dt
 
+    # Partial g / partial z_k
     dg_dz = [df_dq df_dv df_du;
             J zeros(nc,nq) zeros(nc, m)]
 
-    # partial v_k+1 / partial z
-    dv⁺_dq = (-dg_dv⁺\dg_dz)[1:nq,:]
+    # Partial g / partial [v_k+1; λ]
+    dg_dv⁺ = [M-J_q*dt -J';
+            J*dt zeros(nc,nc)]
 
-    # partial q_k+1 / partial z
-    dq⁺_dq = dt*dv⁺_dq
+    # Partial [v_k+1; λ] / partial z_k
+    dv⁺_dq = -dg_dv⁺\dg_dz
+
+    # Partial q_k+1 / partial z_k
+    dq⁺_dq = dt*dv⁺_dq[1:nq,:]
     dq⁺_dq[1:nq,1:nq] += I
 
-    # return partial x_k+1 / partial z_k
+    # Return partial [q_k+1; v_k+1; λ] / partial z_k
     return [dq⁺_dq; dv⁺_dq]
-end
-
-# compute maximal coordinate configuration given joint angles
-function generate_config(model, angles)
-    # compute pin joint locations
-    x = zeros(1)
-    y = zeros(1)
-    for i = 1:model.nb
-        θ = angles[i]
-        x = [x; x[end] + 2 * model.d * cos(θ)]
-        y = [y; y[end] + 2 * model.d * sin(θ)]
-    end
-
-    # compute center of mass and orientation
-    θ = atan.(y[2:end] - y[1:end-1], x[2:end] - x[1:end-1])
-    x = (x[1:end-1] + x[2:end])/2
-    y = (y[1:end-1] + y[2:end])/2
-
-    return vec([x y θ]')
 end
