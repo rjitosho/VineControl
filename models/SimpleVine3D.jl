@@ -12,7 +12,7 @@ mutable struct SimpleVine3D <: AbstractModel
     d::Number
     M
 
-    R
+    W
     K
     C
     D
@@ -45,11 +45,11 @@ function SimpleVine3D(links;              # number of pin joints
     # https://en.wikipedia.org/wiki/List_of_moments_of_inertia
     M = Diagonal(repeat([m_b; m_b; m_b; J_b]; outer = [nb]))
 
-    R = zeros(3*nb, nb)
-    R[3,1] = 1
+    W = zeros(3*nb, nb)
+    W[3,1] = 1
     for i = 1:nb-1
-        R[3*i,i+1] = -1
-        R[3*i+3,i+1] = 1
+        W[3*i,i+1] = -1
+        W[3*i+3,i+1] = 1
     end
 
     K = Diagonal(stiffness*ones(links)) 
@@ -62,9 +62,9 @@ function SimpleVine3D(links;              # number of pin joints
     B = zeros(nq, nb)
     [B[3*i,i]=1 for i=1:nb]
 
-    Fext = zeros(nq)
+    Fext = zeros(nv)
 
-    J = zeros(nc, nq)
+    J = zeros(nc, nv)
     c = zeros(nc)
     λ = zeros(nc)
 
@@ -78,97 +78,154 @@ function SimpleVine3D(links;              # number of pin joints
 
         # pin elements
         for i=1:model.nb-1
-            p1 = q[7*(i-1) .+ (1:3)]
-            r1 = UnitQuaternion(q[7*(i-1) .+ (4:7)])
-            p2 = q[7*i .+ (1:3)]
-            r2 = UnitQuaternion(q[7*i .+ (4:7)])
-            c[3*i .+ (1:3)] = (p2 - r2*endpoint) - (p1 + r1*endpoint)
+            r1 = q[7*(i-1) .+ (1:3)]
+            R1 = UnitQuaternion(q[7*(i-1) .+ (4:7)])
+            r2 = q[7*i .+ (1:3)]
+            R2 = UnitQuaternion(q[7*i .+ (4:7)])
+            c[3*i .+ (1:3)] = (r2 - R2*endpoint) - (r1 + R1*endpoint)
         end
     end
 
-    return SimpleVine3D(nb,nq,nv,nc,n,m,θ0,diam,d,M,R,K,C,D,B,Fext,J,c,λ,c!)
+    return SimpleVine3D(nb,nq,nv,nc,n,m,θ0,diam,d,M,W,K,C,D,B,Fext,J,c,λ,c!)
 end
 
 # Specify the state and control dimensions
 RobotDynamics.state_dim(vine::SimpleVine3D) = vine.n
 RobotDynamics.control_dim(vine::SimpleVine3D) = vine.m
 
+function wrenches(model::SimpleVine3D, x, u)
+    nb, nq, nv = model.nb, model.nq, model.nv
+
+    q = x[1:nq]
+    v = x[1+nq:end]
+
+    # Gravity
+    F = zeros(nv)
+    F[3:6:end] .= -model.M[1,1]*9810
+
+    # Rotation
+    J = model.M[4:6,4:6]
+    for i=1:nb
+        ω_idx = 6*(i-1) .+ (4:6)
+        ω = v[ω_idx]
+        F[ω_idx] += - ω × (J*ω)
+    end
+    
+    # Base pin
+    err = UnitQuaternion(q[4:7]) ⊖ one(UnitQuaternion)
+    F[4:6] += -model.K[1,1]*err.err -model.C[1,1]*v[4:6]
+
+    # Other pins
+    for i=1:nb-1
+        ω1_idx = 6*(i-1) .+ (4:6)
+        ω2_idx = 6*i .+ (4:6)
+
+        # Spring
+        R1 = UnitQuaternion(q[7*(i-1) .+ (4:7)])
+        R2 = UnitQuaternion(q[7*i .+ (4:7)])
+        err = R2 ⊖ R1
+        F[ω1_idx] += model.K[1,1]*err.err
+        F[ω2_idx] += -model.K[1,1]*err.err
+        
+        # Damping
+        ω1 = v[ω1_idx]
+        ω2 = v[ω1_idx]
+        F[ω1_idx] += model.C[1,1]*(ω2-ω1)
+        F[ω2_idx] += -model.C[1,1]*(ω2-ω1)
+    end
+    
+    return F*dt
+end
+
 function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3D, x::StaticVector, u::StaticVector, t, dt)
     # unpack and allocate
-    nb = model.nb
-    nq = model.nq
-    nv = model.nv
-    nc = model.nc
-
+    nb, nq, nv, nc = model.nb, model.nq, model.nv, model.nc
     M = Matrix(model.M)
-    K = model.K
-    C = model.C
-    D = model.D
-    B = model.B
-    R = model.R
-    θ0 = model.θ0
 
     q = x[1:nq]
     v = x[nq+1:end]
 
-    J = zeros(eltype(x), size(model.J))
-    c = zeros(eltype(x), size(model.c))
+    F = model.Fext
+    J = model.J
+    c = model.c
+    λ = model.λ
+
     c! = model.c!
 
-    # joint angles and angular velocities
-    # θall = D*q #q[3:3:end] - [model.θ0; q[3:3:end-3]]
-    # θall[1] -= θ0
-    # θdall = D*v #v[3:3:end] - [0; v[3:3:end-3]]
+    # If called by ForwardDiff
+    if !(eltype(x) <: Float64)
+        F = zeros(eltype(x), size(model.Fext))
+        J = zeros(eltype(x), size(model.J))
+        c = zeros(eltype(x), size(model.c))
+        λ = zeros(eltype(x), size(model.λ))
+    end
 
-    # # external impulse
-    # F = -R * (K*θall + C*θdall) + B * u 
-    # F *= dt # compute impulse
-
-    # gravity
-    F = zeros(model.nv)
-    F[3:6:end] .= -M[1,1]*9810
-
-    # rotation    
-    # ωdot = Jinv*(- ω × (J*ω))
+    # compute external impulse
+    F .= wrenches(model, x, u) * dt
 
     # set initial guess to q_k, v_k
     v⁺ = copy(v)
     q⁺ = copy(q)
-    λ = zeros(eltype(x), size(model.λ))
 
-    for i=1:3
+    max_iters = 10
+    for i=1:10
         # joint constraints
         c!(c,q⁺)
-        ForwardDiff.jacobian!(J, c!, ones(eltype(x), nc), q⁺)
+        J_big = ForwardDiff.jacobian(c!, ones(eltype(x), nc), q⁺)
+        for i=1:nb
+            # dc/dr
+            J[:, 6*(i-1) .+ (1:3)] = J_big[:, 7*(i-1) .+ (1:3)]
+
+            # dc/dq
+            att_jac = Rotations.∇differential(UnitQuaternion(q⁺[7*(i-1) .+ (4:7)]))
+            J[:, 6*(i-1) .+ (4:6)] = J_big[:, 7*(i-1) .+ (4:7)] * att_jac
+        end
+
+        # dq_dv
+        dq_dv = Matrix(dt*I, nv, nv)
+        for i=1:nb            
+            R = UnitQuaternion(q[7*(i-1) .+ (4:7)])
+            R⁺ = UnitQuaternion(q⁺[7*(i-1) .+ (4:7)])
+            att_jac = Rotations.∇differential(R⁺)
+
+            ω_idx = 6*(i-1) .+ (4:6)
+            f(ω⁺) = Rotations.params(Rotations.expm(ω⁺*dt) * R)
+            dq_dv[ω_idx,ω_idx] = att_jac'*ForwardDiff.jacobian(f, v⁺[ω_idx])
+        end
+
+        # Check break condition
+        f = M*(v⁺-v) - J'*λ - F
+        if norm([f;c]) < 1e-12
+            println("breaking at iter: $i")
+            break
+        end
+        i == max_iters && @warn "Max iters reached"
 
         # Newton solve
         A = [M -J';
-            -J zeros(nc, nc)]
+            -J*dq_dv zeros(nc, nc)]
         b = [M*v + F; 
-            (c + J*(q-q⁺))/dt]
-
+            (c - J*dq_dv*v⁺)]
+            
         # Unpack
         sol = A\b
-        v⁺ = sol[1:nq]
-        λ = sol[nq+1:end]
+        v⁺ = sol[1:nv]
+        λ = sol[nv+1:end]
+
         for i=1:nb
             # position
-            p_ind = 7*(i-1) .+ (1:3)
-            q⁺[p_ind] = q[p_ind] + v⁺[6*(i-1) .+ (1:3)]*dt
+            r_idx = 7*(i-1) .+ (1:3)
+            q⁺[r_idx] = q[r_idx] + v⁺[6*(i-1) .+ (1:3)]*dt
 
             # orientation
-            r_ind = 7*(i-1) .+ (4:7)
-            r = UnitQuaternion(q[r_ind])
-            q⁺[r_ind] = r + Rotations.kinematics(r, v⁺[6*(i-1) .+ (4:6)])*dt
+            R_idx = 7*(i-1) .+ (4:7)
+            R = UnitQuaternion(q[R_idx])
+            ω⁺ = v⁺[6*(i-1) .+ (4:6)]
+            R⁺ = Rotations.params(Rotations.expm(ω⁺*dt) * R)
+            q⁺[R_idx] = R⁺/norm(R⁺)
         end
     end
 
-    # store values
-    if eltype(x) <: Float64
-        model.J .= J
-        model.c .= c
-        model.λ .= λ
-    end
     return [q⁺; v⁺]
 end
 
@@ -182,7 +239,7 @@ function discrete_jacobian(model::SimpleVine3D, x_next, z, dt)
     nc = model.nc
     nq = model.nq
 
-    R = model.R
+    W = model.W
     K = model.K
     C = model.C
     D = model.D
@@ -212,8 +269,8 @@ function discrete_jacobian(model::SimpleVine3D, x_next, z, dt)
             J*dt zeros(nc,nc)]
 
     # partial g / partial z_k
-    df_dq = R*K*D*dt - J_q
-    df_dv = R*C*D*dt - M
+    df_dq = W*K*D*dt - J_q
+    df_dv = w*C*D*dt - M
     df_du = -B*dt
 
     dg_dz = [df_dq df_dv df_du;

@@ -14,7 +14,7 @@ include("models/SimpleVine3D.jl")
 include("src/visualize.jl")
 
 # Create the model
-model = SimpleVine3D(2, d=100., m_b = .0001, J_b = [1.0,1.0,1.0], stiffness = 500., damping=100.)
+model = SimpleVine3D(2, d=100., m_b = .01, J_b = [1.0,1.0,1.0], stiffness = 50000., damping=100.)
 n,m = size(model)
 
 # Generate initial state
@@ -23,20 +23,8 @@ q0 = generate_config(model, rotations)
 v0 = zeros(model.nv)
 x0 = [q0; v0]
 
-# # Check pin constraints
-# model.c!(model.c, q0)
-# xs = q0[1:7:end]
-# ys = q0[2:7:end]
-# zs = q0[3:7:end]
-# plot([0;ys],[0;zs],aspect_ratio=:equal)
-
-# dt = .005
-# Z = [q0 q0]
-# Z_meters = change_units_Z(model, Z)
-# visualize!(model, Z_meters, dt)
-
-# # Rollout dynamics
-N = 2
+# Rollout dynamics
+N = 10
 Z = zeros(model.n, N)
 Z[:,1] = [q0;v0]
 U = ones(model.m, N-1)
@@ -48,9 +36,18 @@ for k = 2:N
     println(maximum(abs.(model.c)))
 end
 
-# # visualize
-# Z_meters = change_units_Z(model, Z)
-# # visualize!(model, Z_meters, dt)
+# visualize
+Z_meters = change_units_Z(model, Z)
+visualize!(model, Z_meters, dt)
 
-# # plot angles and velocity
-# plot(Z[3:3:model.nq,:]')
+# plot angles
+angle1 = []
+angle2 = []
+for  k = 1:N
+    push!(angle1, Rotations.rotation_angle(UnitQuaternion(Z[4:7,k])))
+    push!(angle2, Rotations.rotation_angle(UnitQuaternion(Z[11:14,k])))
+end
+plot([angle1 angle2])
+
+# plot y
+plot([Z[2,:] Z[9,:]])
