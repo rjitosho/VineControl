@@ -40,7 +40,7 @@ function SimpleVine3D(links;              # number of pin joints
     nc = 3*nb   # number of pin constraints
 
     n = 13*nb    # state size
-    m = nb       # control size
+    m = 3       # control size
 
     # https://en.wikipedia.org/wiki/List_of_moments_of_inertia
     M = Diagonal(repeat([m_b; m_b; m_b; J_b]; outer = [nb]))
@@ -93,6 +93,26 @@ end
 RobotDynamics.state_dim(vine::SimpleVine3D) = vine.n
 RobotDynamics.control_dim(vine::SimpleVine3D) = vine.m
 
+function bend_error(R1, R2)
+    endpoint = [0;0;-model.d]
+    R1 = UnitQuaternion(R1)
+    R2 = UnitQuaternion(R2)
+
+    # Bending stiffness
+    err = (R2 ⊖ R1).err
+    bend_axis = cross(R1*endpoint, R2*endpoint)
+    norm(bend_axis) > 1e-6 && (bend_axis /= norm(bend_axis))
+    bend_err = dot(bend_axis, err) * bend_axis
+    return bend_err, bend_axis 
+
+    # Torsion stiffness
+    twist_err = err - bend_err
+end
+
+# function damper( )
+#     ω2-ω1
+# end
+
 function wrenches(model::SimpleVine3D, x, u)
     nb, nq, nv = model.nb, model.nq, model.nv
 
@@ -108,12 +128,13 @@ function wrenches(model::SimpleVine3D, x, u)
     for i=1:nb
         ω_idx = 6*(i-1) .+ (4:6)
         ω = v[ω_idx]
-        F[ω_idx] += - ω × (J*ω)
+        F[ω_idx] += u[1]*[0.5;sqrt(3)/2;0] - ω × (J*ω) # u[1]*[1.0;0;0]
     end
-    
+
     # Base pin
-    err = UnitQuaternion(q[4:7]) ⊖ one(UnitQuaternion)
-    F[4:6] += -model.K[1,1]*err.err -model.C[1,1]*v[4:6]
+    bend_err, bend_axis = bend_error([1.0,0,0,0], q[4:7])
+    F[4:6] += -model.K[1,1]*bend_err
+    F[4:6] += -model.C[1,1]*dot(bend_axis, v[4:6])*bend_axis
 
     # Other pins
     for i=1:nb-1
@@ -121,20 +142,19 @@ function wrenches(model::SimpleVine3D, x, u)
         ω2_idx = 6*i .+ (4:6)
 
         # Spring
-        R1 = UnitQuaternion(q[7*(i-1) .+ (4:7)])
-        R2 = UnitQuaternion(q[7*i .+ (4:7)])
-        err = R2 ⊖ R1
-        F[ω1_idx] += model.K[1,1]*err.err
-        F[ω2_idx] += -model.K[1,1]*err.err
-        
+        bend_err, bend_axis = bend_error(q[7*(i-1) .+ (4:7)], q[7*i .+ (4:7)])
+        F[ω1_idx] += model.K[1,1]*bend_err
+        F[ω2_idx] += -model.K[1,1]*bend_err
+
         # Damping
         ω1 = v[ω1_idx]
         ω2 = v[ω1_idx]
-        F[ω1_idx] += model.C[1,1]*(ω2-ω1)
-        F[ω2_idx] += -model.C[1,1]*(ω2-ω1)
+        diff = dot(bend_axis, ω2-ω1)*bend_axis
+        F[ω1_idx] += model.C[1,1]*diff
+        F[ω2_idx] += -model.C[1,1]*diff
     end
     
-    return F*dt
+    return F
 end
 
 function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3D, x::StaticVector, u::StaticVector, t, dt)
@@ -167,8 +187,8 @@ function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3
     v⁺ = copy(v)
     q⁺ = copy(q)
 
-    max_iters = 10
-    for i=1:10
+    max_iters = 100
+    for i=1:max_iters
         # joint constraints
         c!(c,q⁺)
         J_big = ForwardDiff.jacobian(c!, ones(eltype(x), nc), q⁺)
