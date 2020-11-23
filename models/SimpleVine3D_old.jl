@@ -59,9 +59,8 @@ function SimpleVine3D(links;              # number of pin joints
     [D[i,3*i]=1 for i=1:nb]
     [D[i+1,3*i]=-1 for i=1:nb-1]
 
-    B = [1      -1/2        -1/2;
-         0 -sqrt(3)/2 sqrt(3)/2;
-         0      0           0]
+    B = zeros(nq, nb)
+    [B[3*i,i]=1 for i=1:nb]
 
     Fext = zeros(nv)
 
@@ -129,7 +128,7 @@ function wrenches(model::SimpleVine3D, x, u)
     for i=1:nb
         ω_idx = 6*(i-1) .+ (4:6)
         ω = v[ω_idx]
-        F[ω_idx] += model.B*u - ω × (J*ω) 
+        F[ω_idx] += u[1]*[0.5;sqrt(3)/2;0] - ω × (J*ω) # u[1]*[1.0;0;0]
     end
 
     # Base pin
@@ -158,39 +157,7 @@ function wrenches(model::SimpleVine3D, x, u)
     return F
 end
 
-function J!(J,c!,q⁺,type)
-    nb = Int(length(q⁺)/7)
-    nc, _ = size(J)
-    J_big = ForwardDiff.jacobian(c!, ones(type, nc), q⁺)
-    
-    for i=1:nb
-        # dc/dr
-        J[:, 6*(i-1) .+ (1:3)] = J_big[:, 7*(i-1) .+ (1:3)]
-
-        # dc/dq
-        att_jac = Rotations.∇differential(UnitQuaternion(q⁺[7*(i-1) .+ (4:7)]))
-        J[:, 6*(i-1) .+ (4:6)] = J_big[:, 7*(i-1) .+ (4:7)] * att_jac
-    end
-end
-
-function q_next!(q⁺,v⁺,q,dt)
-    nb = Int(length(q⁺)/7)
-    for i=1:nb
-        # position
-        r_idx = 7*(i-1) .+ (1:3)
-        q⁺[r_idx] = q[r_idx] + v⁺[6*(i-1) .+ (1:3)]*dt
-
-        # orientation
-        R_idx = 7*(i-1) .+ (4:7)
-        R = UnitQuaternion(q[R_idx])
-        ω⁺ = v⁺[6*(i-1) .+ (4:6)]
-        R⁺ = Rotations.params(Rotations.expm(ω⁺*dt) * R)
-        q⁺[R_idx] = R⁺/norm(R⁺)
-    end
-end
-
-function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3D, 
-                                        x::StaticVector, u::StaticVector, t, dt)
+function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3D, x::StaticVector, u::StaticVector, t, dt)
     # unpack and allocate
     nb, nq, nv, nc = model.nb, model.nq, model.nv, model.nc
     M = Matrix(model.M)
@@ -207,25 +174,33 @@ function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3
 
     # If called by ForwardDiff
     if !(eltype(x) <: Float64)
-        # F = zeros(eltype(x), size(model.Fext))
-        # J = zeros(eltype(x), size(model.J))
-        # c = zeros(eltype(x), size(model.c))
-        # λ = zeros(eltype(x), size(model.λ))
-        F = convert(typeof(x), model.Fext)
-        J = convert(typeof(x), model.J)
-        c = convert(typeof(x), model.c)
-        λ = convert(typeof(x), model.λ)
+        F = zeros(eltype(x), size(model.Fext))
+        J = zeros(eltype(x), size(model.J))
+        c = zeros(eltype(x), size(model.c))
+        λ = zeros(eltype(x), size(model.λ))
     end
 
-    # set initial values
+    # compute external impulse
+    F .= wrenches(model, x, u) * dt
+
+    # set initial guess to q_k, v_k
     v⁺ = copy(v)
     q⁺ = copy(q)
-    F .= wrenches(model, x, u) * dt
-    J!(J,c!,q⁺,eltype(x))
-    c!(c,q⁺)
-    
+
     max_iters = 100
-    for i=1:max_iters        
+    for i=1:max_iters
+        # joint constraints
+        c!(c,q⁺)
+        J_big = ForwardDiff.jacobian(c!, ones(eltype(x), nc), q⁺)
+        for i=1:nb
+            # dc/dr
+            J[:, 6*(i-1) .+ (1:3)] = J_big[:, 7*(i-1) .+ (1:3)]
+
+            # dc/dq
+            att_jac = Rotations.∇differential(UnitQuaternion(q⁺[7*(i-1) .+ (4:7)]))
+            J[:, 6*(i-1) .+ (4:6)] = J_big[:, 7*(i-1) .+ (4:7)] * att_jac
+        end
+
         # dq_dv
         dq_dv = Matrix(dt*I, nv, nv)
         for i=1:nb            
@@ -237,41 +212,37 @@ function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3
             f(ω⁺) = Rotations.params(Rotations.expm(ω⁺*dt) * R)
             dq_dv[ω_idx,ω_idx] = att_jac'*ForwardDiff.jacobian(f, v⁺[ω_idx])
         end
-        
+
         # Check break condition
-        res = norm([M*(v⁺-v) - J'*λ - F; c])
-        println("res: ", res)
-        if norm(res) < 1e-12
+        f = M*(v⁺-v) - J'*λ - F
+        if norm([f;c]) < 1e-12
             println("breaking at iter: $i")
             break
         end
         i == max_iters && @warn "Max iters reached"
-        
+
         # Newton solve
         A = [M -J';
             -J*dq_dv zeros(nc, nc)]
         b = [M*v + F; 
             (c - J*dq_dv*v⁺)]
-        sol = A\b  
+            
+        # Unpack
+        sol = A\b
+        v⁺ = sol[1:nv]
+        λ = sol[nv+1:end]
 
-        # Line search         
-        v_old = copy(v⁺)
-        λ_old = copy(λ)
-        dv = sol[1:nv]-v_old
-        dλ = sol[nv+1:end] - λ_old
-        alpha = 1.0
-        res_new = res + 1
-        while (res_new > res) & (alpha > .5^10)
-            v⁺ = v_old + alpha*dv
-            λ .= λ_old + alpha*dλ
-            
-            q_next!(q⁺,v⁺,q,dt)
-            c!(c,q⁺)
-            J!(J,c!,q⁺,eltype(x))
-            
-            res_new = norm([M*(v⁺-v) - J'*λ - F; c])
-            println("res new: ", res_new)
-            alpha /= 2.0 
+        for i=1:nb
+            # position
+            r_idx = 7*(i-1) .+ (1:3)
+            q⁺[r_idx] = q[r_idx] + v⁺[6*(i-1) .+ (1:3)]*dt
+
+            # orientation
+            R_idx = 7*(i-1) .+ (4:7)
+            R = UnitQuaternion(q[R_idx])
+            ω⁺ = v⁺[6*(i-1) .+ (4:6)]
+            R⁺ = Rotations.params(Rotations.expm(ω⁺*dt) * R)
+            q⁺[R_idx] = R⁺/norm(R⁺)
         end
     end
 
