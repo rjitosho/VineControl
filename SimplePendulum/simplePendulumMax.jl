@@ -23,7 +23,8 @@ dt = 0.03
 tf = 5.0
 
 # Maximal dynamics
-c!(x) = [x[1] - .5*cos(x[3]-pi/2); x[2] - .5*sin(x[3]-pi/2)]
+c!(x) = [x[1] - .5*cos(x[3]-pi/2); 
+         x[2] - .5*sin(x[3]-pi/2)]
 
 function f(x,u,dt)
     m = 1.
@@ -40,7 +41,6 @@ function f(x,u,dt)
 
     q⁺ = copy(q)
     v⁺ = copy(v)
-    
 
     max_iters = 10
     for i=1:max_iters      

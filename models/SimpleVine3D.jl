@@ -104,15 +104,12 @@ function bend_error(R1, R2)
     bend_axis = cross(R1*endpoint, R2*endpoint)
     norm(bend_axis) > 1e-6 && (bend_axis /= norm(bend_axis))
     bend_err = dot(bend_axis, err) * bend_axis
-    return bend_err, bend_axis 
-
+    
     # Torsion stiffness
     twist_err = err - bend_err
-end
 
-# function damper( )
-#     ω2-ω1
-# end
+    return bend_err, bend_axis, twist_err 
+end
 
 function wrenches(model::SimpleVine3D, x, u)
     nb, nq, nv = model.nb, model.nq, model.nv
@@ -129,30 +126,31 @@ function wrenches(model::SimpleVine3D, x, u)
     for i=1:nb
         ω_idx = 6*(i-1) .+ (4:6)
         ω = v[ω_idx]
-        F[ω_idx] += model.B*u - ω × (J*ω) 
+        F[ω_idx] += model.B*u #- ω × (J*ω) 
     end
 
     # Base pin
-    bend_err, bend_axis = bend_error([1.0,0,0,0], q[4:7])
+    bend_err, bend_axis, twist_err = bend_error([1.0,0,0,0], q[4:7])
     F[4:6] += -model.K[1,1]*bend_err
     F[4:6] += -model.C[1,1]*dot(bend_axis, v[4:6])*bend_axis
-
+    
     # Other pins
     for i=1:nb-1
         ω1_idx = 6*(i-1) .+ (4:6)
         ω2_idx = 6*i .+ (4:6)
 
         # Spring
-        bend_err, bend_axis = bend_error(q[7*(i-1) .+ (4:7)], q[7*i .+ (4:7)])
-        F[ω1_idx] += model.K[1,1]*bend_err
-        F[ω2_idx] += -model.K[1,1]*bend_err
+        bend_err, bend_axis, twist_err = bend_error(q[7*(i-1) .+ (4:7)], q[7*i .+ (4:7)])
+        F[ω1_idx] += model.K[i+1,i+1]*bend_err + 5000*twist_err
+        F[ω2_idx] += -model.K[i+1,i+1]*bend_err - 5000*twist_err
 
         # Damping
         ω1 = v[ω1_idx]
         ω2 = v[ω1_idx]
         diff = dot(bend_axis, ω2-ω1)*bend_axis
-        F[ω1_idx] += model.C[1,1]*diff
-        F[ω2_idx] += -model.C[1,1]*diff
+        twist_diff = (ω2-ω1) - diff
+        F[ω1_idx] += model.C[i+1,i+1]*diff + 3000*twist_diff
+        F[ω2_idx] += -model.C[i+1,i+1]*diff - 3000*twist_diff
     end
     
     return F
@@ -256,23 +254,22 @@ function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3
 
         # Line search         
         v_old = copy(v⁺)
-        λ_old = copy(λ)
         dv = sol[1:nv]-v_old
-        dλ = sol[nv+1:end] - λ_old
         alpha = 1.0
         res_new = res + 1
         while (res_new > res) & (alpha > .5^10)
             v⁺ = v_old + alpha*dv
-            λ .= λ_old + alpha*dλ
-            
             q_next!(q⁺,v⁺,q,dt)
             c!(c,q⁺)
             J!(J,c!,q⁺,eltype(x))
-            
+            F .= wrenches(model, x, u) * dt
+            λ .= J'\(M*(v⁺-v) - F)
+           
             res_new = norm([M*(v⁺-v) - J'*λ - F; c])
             println("res new: ", res_new)
-            alpha /= 2.0 
+            alpha /= 2.0             
         end
+        @assert (res_new < res)
     end
 
     return [q⁺; v⁺]

@@ -25,15 +25,14 @@ v0 = zeros(model.nv)
 x0 = [q0; v0]
 
 # Rollout dynamics
-N = 201
+N = 401
 Z = zeros(model.n, N)
 Z[:,1] = [q0;v0]
 U = zeros(model.m, N-1)
-U[1,1:50] = 30000*sin.(collect(1:50)/50*pi)
-U[2,51:100] .= 30000*sin.(collect(1:50)/50*pi)
-# U[2,101:200] .= 300
-# U[2,201:N-1] .= 3000
-dt = .002
+U[1,1:200] = 10000*sin.(collect(1:200)/200*pi)
+U[2,101:300] = 10000*sin.(collect(1:200)/200*pi)
+U[3,201:400] = 10000*sin.(collect(1:200)/200*pi)
+dt = .005
 
 for k = 2:N
     global Z
@@ -43,22 +42,13 @@ for k = 2:N
 end
 
 # visualize
-# Z_meters = change_units_Z(model, Z)
+Z_meters = change_units_Z(model, Z)
 # visualize!(model, Z_meters, dt)
 
-# plot angles
-# angle1 = []
-# angle2 = []
-# for  k = 1:N
-#     push!(angle1, Rotations.rotation_angle(UnitQuaternion(Z[4:7,k])))
-#     push!(angle2, Rotations.rotation_angle(UnitQuaternion(Z[11:14,k])))
-# end
-# plot([angle1 angle2])
-
-# # plot y
+# plot y
 plot([Z[2,:] Z[9,:]])
 plot!([Z[1,:] Z[8,:]])
 
-time = 1:138
-plot([Z[2,time] Z[9,time]])
-plot!([Z[1,time] Z[8,time]])
+# time = 1:138
+# plot([Z[2,time] Z[9,time]])
+# plot!([Z[1,time] Z[8,time]])
