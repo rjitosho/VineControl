@@ -3,26 +3,6 @@ using LinearAlgebra
 using Plots
 using Random
 
-## Simple Pendulum
-n = 6 # number of states 
-m = 1 # number of controls
-
-#initial and goal conditions
-x0 = [0.; -.5; zeros(4)]
-xf = [0.; .5; pi; zeros(3)]
-
-#costs
-Q = zeros(n,n)
-Q[3,3] = 0.3
-Q[6,6] = 0.3
-# Q = 0.3*Matrix(I,n,n)
-Qf = 100*Q
-R = 0.3*Matrix(I,m,m)
-
-#simulation
-dt = 0.03
-tf = 5.0
-
 # Maximal dynamics
 c!(x) = [x[1] - .5*cos(x[3]-pi/2); 
          x[2] - .5*sin(x[3]-pi/2)]
@@ -166,6 +146,7 @@ function backwardpass(X,Lam,U,F,Q,R,Qf,xf)
         Ku = K_all[1:m,:]
         Kλ = K_all[m+1:m+nc,:]
         K[:,:,k] = Ku
+        # @show Ku
 
         l_all = M\[r + s⁺'*D;zeros(nc)]
         lu = l_all[1:m,:]
@@ -200,7 +181,7 @@ function forwardpass(X,U,f,J,K,l,v1,v2,c1=0.0,c2=1.0)
     
     alpha = 1.0
     count = 0
-    while J > J_prev# && count < 1#|| z < c1 || z > c2 
+    while J > J_prev #|| z < c1 || z > c2 
         for k = 1:N-1
           U_[:,k] = U[:,k] - K[:,:,k]*(X[:,k] - X_prev[:,k]) - alpha*l[:,k]
           X[:,k+1], Lam[:,k] = f(X[:,k],U_[:,k],dt);
@@ -209,7 +190,7 @@ function forwardpass(X,U,f,J,K,l,v1,v2,c1=0.0,c2=1.0)
         J = cost(X,U_,Q,R,Qf,xf)
         
         # dV = alpha*v1 + (alpha^2)*v2/2.0
-        dJ = J_prev - J
+        # dJ = J_prev - J
         # z = dJ/dV[1]
 
         alpha = alpha/2.0;
@@ -218,9 +199,9 @@ function forwardpass(X,U,f,J,K,l,v1,v2,c1=0.0,c2=1.0)
 
     println("New cost: $J")
     println("- Line search iters: ", abs(log(.5,alpha)))
-    # println("- Expected improvement: $(dV[1])")
+    println("- Expected improvement: $(dV[1])")
     println("- Actual improvement: $(dJ)")
-    # println("- (z = $z)\n")
+    println("- (z = $z)\n")
     return X, U_, J, Lam
 end
 
@@ -260,10 +241,63 @@ function solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,iterations=100,eps=1e-5;control_init="ra
     return X, U, K, l, X0, U0, Lam0
 end
 
-X, U, K, l, X0, U0, Lam0 = solve(x0,m,f,getABCG,Q,R,Qf,xf,dt,tf,200,control_init="random");
+function stable_rollout(Ku,x0,u0,f,dt,tf)
+    N = convert(Int64,floor(tf/dt))
+    X = zeros(size(x0,1),N)
+    U = zeros(1,N-1)
+    Lam = zeros(2,N-1)
+    X[:,1] = x0
+    for k = 1:N-1
+        U[k] = (u0-Ku*(X[:,k]-xf))[1]
+        X[:,k+1], Lam[:,k] = f(X[:,k],U[:,k],dt)
+    end
+    return X, Lam, U
+end
 
-P = plot(range(0,stop=tf,length=size(X,2)),X0[3,:])
-P = plot!(range(0,stop=tf,length=size(X,2)),X0[6,:])
+## Simple Pendulum
+n = 6 # number of states 
+m = 1 # number of controls
 
-P = plot(range(0,stop=tf,length=size(X,2)),X[3,:])
-P = plot!(range(0,stop=tf,length=size(X,2)),X[6,:])
+#initial and goal conditions
+x0 = [0.; -.5; zeros(4)]
+xf = [0.; .5; pi; zeros(3)]
+
+#costs
+Q = zeros(n,n)
+Q[3,3] = 0.3
+Q[6,6] = 0.3
+Qf = 100*Q
+R = 0.3*Matrix(I,m,m)
+
+#simulation
+dt = 0.03
+tf = 3.0
+
+N = convert(Int64,floor(tf/dt))
+X = repeat(xf,outer=(1,N))
+Lam = repeat([0;0.2943],outer=(1,N-1))
+U = zeros(1,N-1)
+K, l, v1, v2 = backwardpass(X,Lam,U,getABCG,Q,R,Q,xf)
+
+Ku = K[:,:,1]
+x1, _ = f(xf,[1.],dt)
+X_opt, Lam_opt, U_opt=stable_rollout(Ku,x1,[0.],f,dt,tf)
+X, Lam, U=stable_rollout(Ku,x1,[.1],f,dt,tf)
+plot([X[3,:] X_opt[3,:]]) 
+plot([X[6,:] X_opt[6,:]])
+
+J_prev = cost(X,U,Q,R,Qf,xf)
+println("Initial Cost: $J_prev\n")
+J_opt = cost(X_opt,U_opt,Q,R,Qf,xf)
+println("Optimal Cost: $J_opt\n")
+
+K, l, v1, v2 = backwardpass(X,Lam,U,getABCG,Q,R,Qf,xf)
+K6 = [K[1,6,i] for i=1:N-1]
+K3 = [K[1,3,i] for i=1:N-1]
+plot([K3 K6])
+plot(l')
+
+X, U, J, Lam = forwardpass(X,U,f,J_prev,K,l,v1,v2)
+J_fin = cost(X,U,Q,R,Qf,xf)
+println("Final Cost: $J_fin\n")
+plot(X[3,:])

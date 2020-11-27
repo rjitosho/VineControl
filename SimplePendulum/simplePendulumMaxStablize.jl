@@ -21,7 +21,7 @@ R = 0.3*Matrix(I,m,m)
 
 #simulation
 dt = 0.03
-tf = 5.0
+tf = 3.0
 
 # Maximal dynamics
 c!(x) = [x[1] - .5*cos(x[3]-pi/2); 
@@ -166,8 +166,9 @@ function backwardpass(X,Lam,U,F,Q,R,Qf,xf)
         Ku = K_all[1:m,:]
         Kλ = K_all[m+1:m+nc,:]
         K[:,:,k] = Ku
+        @show Ku
 
-        l_all = M\[r + s⁺'*D;zeros(nc)]
+        l_all = M\[r;zeros(nc)]
         lu = l_all[1:m,:]
         lλ = l_all[m+1:m+nc,:]
         l[:,k] = lu
@@ -218,9 +219,9 @@ function forwardpass(X,U,f,J,K,l,v1,v2,c1=0.0,c2=1.0)
 
     println("New cost: $J")
     println("- Line search iters: ", abs(log(.5,alpha)))
-    # println("- Expected improvement: $(dV[1])")
+    println("- Expected improvement: $(dV[1])")
     println("- Actual improvement: $(dJ)")
-    # println("- (z = $z)\n")
+    println("- (z = $z)\n")
     return X, U_, J, Lam
 end
 
@@ -260,10 +261,30 @@ function solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,iterations=100,eps=1e-5;control_init="ra
     return X, U, K, l, X0, U0, Lam0
 end
 
-X, U, K, l, X0, U0, Lam0 = solve(x0,m,f,getABCG,Q,R,Qf,xf,dt,tf,200,control_init="random");
+function stable_rollout(Ku,x0,u0,f,dt,tf)
+    N = convert(Int64,floor(tf/dt))
+    X = zeros(size(x0,1),N)
+    U = zeros(1,N-1)
+    Lam = zeros(2,N-1)
+    X[:,1] = x0
+    for k = 1:N-1
+        U[k] = (u0-Ku*(X[:,k]-xf))[1]
+        X[:,k+1], Lam[:,k] = f(X[:,k],U[:,k],dt)
+    end
+    return X, Lam, U
+end
 
-P = plot(range(0,stop=tf,length=size(X,2)),X0[3,:])
-P = plot!(range(0,stop=tf,length=size(X,2)),X0[6,:])
+timesteps = 100
+X = repeat(xf,outer=(1,timesteps+1))
+Lam = repeat([0;0.2943],outer=(1,timesteps))
+U = .5/sqrt(2)*9.81*ones(1,timesteps)
+K, l, v1, v2 = backwardpass(X,Lam,U,getABCG,Q,R,Q,xf)
+K6 = [K[1,6,i] for i=1:timesteps]
+K3 = [K[1,3,i] for i=1:timesteps]
+plot([K3 K6])
 
-P = plot(range(0,stop=tf,length=size(X,2)),X[3,:])
-P = plot!(range(0,stop=tf,length=size(X,2)),X[6,:])
+Ku = K[:,:,1]
+xf = [.25*sqrt(2);.25*sqrt(2);3*pi/4;zeros(3)]
+x1, _ = f(xf,[1.],dt)
+X, Lam, U=stable_rollout(Ku,x1,U[:,1],f,dt,tf)
+plot(X[3,:])
