@@ -32,12 +32,14 @@ U = zeros(model.m, N-1)
 U[1,1:200] = 10000*sin.(collect(1:200)/200*pi)
 U[2,101:300] = 10000*sin.(collect(1:200)/200*pi)
 U[3,201:400] = 10000*sin.(collect(1:200)/200*pi)
+Lam = zeros(model.nc, N-1)
 dt = .005
 
 for k = 2:N
     global Z
     print("k = $k\t")
     Z[:,k] = discrete_dynamics(PassThrough, model, SVector{model.n}(Z[:,k-1]),  SVector{model.m}(U[:,k-1]), 0, dt)
+    Lam[:,k-1] = model.λ
     # println(maximum(abs.(model.c)))
 end
 
@@ -48,7 +50,3 @@ Z_meters = change_units_Z(model, Z)
 # plot y
 plot([Z[2,:] Z[9,:]])
 plot!([Z[1,:] Z[8,:]])
-
-# time = 1:138
-# plot([Z[2,time] Z[9,time]])
-# plot!([Z[1,time] Z[8,time]])

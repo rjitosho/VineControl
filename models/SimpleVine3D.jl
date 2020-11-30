@@ -276,62 +276,70 @@ function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3
     return [q⁺; v⁺]
 end
 
-function discrete_jacobian(model::SimpleVine3D, x_next, z, dt)
-    # Unpack
-    n, m = size(model)
-    x = z[1:n]
-    u = z[n+1:end]
-  
-    nb = model.nb
-    nc = model.nc
-    nq = model.nq
-
-    W = model.W
-    K = model.K
-    C = model.C
-    D = model.D
-    B = model.B
-    M = model.M
+function discrete_jacobian(model::SimpleVine3D, x⁺, z, dt)
+    n, m = size(model)  
+    nb, nq, nv, nc = model.nb, model.nq, model.nv, model.nc
+    M, J, c, c! = model.M, model.J, model.c, model.c!
     
-    J = model.J
-    c = model.c
-    λ = model.λ
-    c! = model.c!
+    function f_imp(z)
+        # Unpack
+        q⁺ = z[1:nq]
+        v⁺ = z[nq .+ (1:nv)]
+        q = z[n .+ (1:nq)]
+        v = z[n+nq .+ (1:nv)]
+        u = z[2*n .+ (1:m)]
+        λ = z[2*n+m .+ (1:nc)]
 
-    # q⁺ = x_next[1:model.nq]
-    # c!(c,q⁺)
-    # ForwardDiff.jacobian!(J, c!, ones(nc), q⁺)
+        F = wrenches(model, [q; v], u) * dt
+        J = zeros(eltype(z),size(model.J))
+        J!(J,c!,q⁺,eltype(z))
+        q_next = zeros(eltype(z),size(q⁺))
+        q_next!(q_next,v⁺,q,dt)
 
-    # partial J / partial q_k+1
-    function JTλ(q)
-        J_tmp = zeros(eltype(q), size(J))
-        ForwardDiff.jacobian!(J_tmp, c!, ones(eltype(q), nc), q)
-        return J_tmp'*λ
+        return [M*(v⁺-v) - (J'*λ + F); q⁺ - q_next]
     end
-    J_q = zeros(nq, nq)
-    # ForwardDiff.jacobian!(J_q, JTλ, x_next[1:nq])
+    
+    all_partials = ForwardDiff.jacobian(f_imp, [x⁺;z])
+    ABC = -all_partials[:,1:n]\all_partials[:,1+n:end]
+    A = ABC[:, 1:n]
+    B = ABC[:, n .+ (1:m)]
+    C = ABC[:, n+m .+ (1:nc)]
 
-    # partial g / partial v_k+1 and λ
-    dg_dv⁺ = [M-J_q*dt -J';
-            J*dt zeros(nc,nc)]
+    J!(model.J,c!,x⁺[1:nq],Float64)
+    G = [model.J zeros(nc, nv)]
 
-    # partial g / partial z_k
-    df_dq = W*K*D*dt - J_q
-    df_dv = w*C*D*dt - M
-    df_du = -B*dt
+    return A,B,C,G
 
-    dg_dz = [df_dq df_dv df_du;
-            J zeros(nc,nq) zeros(nc, m)]
+    # # partial J / partial q_k+1
+    # function JTλ(q)
+    #     J_tmp = zeros(eltype(q), size(J))
+    #     ForwardDiff.jacobian!(J_tmp, c!, ones(eltype(q), nc), q)
+    #     return J_tmp'*λ
+    # end
+    # J_q = zeros(nq, nq)
+    # # ForwardDiff.jacobian!(J_q, JTλ, x_next[1:nq])
 
-    # partial v_k+1 / partial z
-    dv⁺_dq = (-dg_dv⁺\dg_dz)[1:nq,:]
+    # # partial g / partial v_k+1 and λ
+    # dg_dv⁺ = [M-J_q*dt -J';
+    #         J*dt zeros(nc,nc)]
 
-    # partial q_k+1 / partial z
-    dq⁺_dq = dt*dv⁺_dq
-    dq⁺_dq[1:nq,1:nq] += I
+    # # partial g / partial z_k
+    # df_dq = W*K*D*dt - J_q
+    # df_dv = w*C*D*dt - M
+    # df_du = -B*dt
 
-    # return partial x_k+1 / partial z_k
-    return [dq⁺_dq; dv⁺_dq]
+    # dg_dz = [df_dq df_dv df_du;
+    #         J zeros(nc,nq) zeros(nc, m)]
+
+    # # partial v_k+1 / partial z
+    # dv⁺_dq = (-dg_dv⁺\dg_dz)[1:nq,:]
+
+    # # partial q_k+1 / partial z
+    # dq⁺_dq = dt*dv⁺_dq
+    # dq⁺_dq[1:nq,1:nq] += I
+
+    # # return partial x_k+1 / partial z_k
+    # return [dq⁺_dq; dv⁺_dq]
 end
 
 # compute maximal coordinate configuration given body rotations

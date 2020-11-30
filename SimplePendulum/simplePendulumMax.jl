@@ -167,7 +167,7 @@ function backwardpass(X,Lam,U,F,Q,R,Qf,xf)
         Kλ = K_all[m+1:m+nc,:]
         K[:,:,k] = Ku
 
-        l_all = M\[r + s⁺'*D;zeros(nc)]
+        l_all = M\[r + D'*s⁺; zeros(nc)]
         lu = l_all[1:m,:]
         lλ = l_all[m+1:m+nc,:]
         l[:,k] = lu
