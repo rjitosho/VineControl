@@ -36,7 +36,7 @@ dt = .005
 
 for k = 2:N
     global Z
-    println("k = $k")
+    print("k = $k\t")
     Z[:,k] = discrete_dynamics(PassThrough, model, SVector{model.n}(Z[:,k-1]),  SVector{model.m}(U[:,k-1]), 0, dt)
     # println(maximum(abs.(model.c)))
 end

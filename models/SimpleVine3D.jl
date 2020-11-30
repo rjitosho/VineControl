@@ -118,7 +118,7 @@ function wrenches(model::SimpleVine3D, x, u)
     v = x[1+nq:end]
 
     # Gravity
-    F = zeros(nv)
+    F = zeros(eltype(x), nv)
     F[3:6:end] .= -model.M[1,1]*9810
 
     # Rotation
@@ -126,7 +126,7 @@ function wrenches(model::SimpleVine3D, x, u)
     for i=1:nb
         ω_idx = 6*(i-1) .+ (4:6)
         ω = v[ω_idx]
-        F[ω_idx] += model.B*u #- ω × (J*ω) 
+        F[ω_idx] += model.B*u - ω × (J*ω) 
     end
 
     # Base pin
@@ -238,7 +238,7 @@ function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3
         
         # Check break condition
         res = norm([M*(v⁺-v) - J'*λ - F; c])
-        println("res: ", res)
+        # println("res: ", res)
         if norm(res) < 1e-12
             println("breaking at iter: $i")
             break
@@ -262,11 +262,12 @@ function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3
             q_next!(q⁺,v⁺,q,dt)
             c!(c,q⁺)
             J!(J,c!,q⁺,eltype(x))
+            # F .= wrenches(model, [q⁺;v⁺], u) * dt
             F .= wrenches(model, x, u) * dt
             λ .= J'\(M*(v⁺-v) - F)
            
             res_new = norm([M*(v⁺-v) - J'*λ - F; c])
-            println("res new: ", res_new)
+            # println("res new: ", res_new)
             alpha /= 2.0             
         end
         @assert (res_new < res)

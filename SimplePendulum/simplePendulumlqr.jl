@@ -8,8 +8,8 @@ n = 6 # number of states
 m = 1 # number of controls
 
 #initial and goal conditions
-x0 = [0.; -.5; zeros(4)]
-xf = [0.; .5; pi; zeros(3)]
+x0 = zeros(6)
+xf = zeros(6)
 
 #costs
 Q = zeros(n,n)
@@ -17,15 +17,15 @@ Q[3,3] = 0.3
 Q[6,6] = 0.3
 # Q = 0.3*Matrix(I,n,n)
 Qf = 100*Q
-R = 0.1*Matrix(I,m,m)
+R = 0.3*Matrix(I,m,m)
 
 #simulation
 dt = 0.03
 tf = 5.0
 
 # Maximal dynamics
-c!(x) = [x[1] - .5*cos(x[3]-pi/2); 
-         x[2] - .5*sin(x[3]-pi/2)]
+c!(x) = [x[1] + .5*sin(x[3]); 
+         (x[2]-.5) + .5*cos(x[3])]
 
 function f(x,u,dt)
     m = 1.
@@ -166,8 +166,9 @@ function backwardpass(X,Lam,U,F,Q,R,Qf,xf)
         Ku = K_all[1:m,:]
         Kλ = K_all[m+1:m+nc,:]
         K[:,:,k] = Ku
+        @show Ku
 
-        l_all = M\[r + s⁺'*D;zeros(nc)]
+        l_all = M\[r;zeros(nc)]
         lu = l_all[1:m,:]
         lλ = l_all[m+1:m+nc,:]
         l[:,k] = lu
@@ -186,81 +187,44 @@ function backwardpass(X,Lam,U,F,Q,R,Qf,xf)
     return K, l, v1, v2
 end
 
-function forwardpass(X,U,f,J,K,l,v1,v2,c1=0.0,c2=1.0)
-    N = size(X,2)
-    m = size(U,1)
-    Lam = zeros(2,N-1)
-    X_prev = copy(X)
-    J_prev = copy(J)
-    U_ = zeros(m,N-1)
-    J = Inf
-    dV = 0.0
-    dJ = 0.0
-    z = 0.0
+# function ricatti(F,Q,R,dt)
+#     xg = zeros(6)
+#     ug = [0.0]
+#     _, Lamg = f(xg,ug,dt)
+#     A,B,C,G,g = F(xg,xg,ug,Lamg,dt)
+
+#     S = [Q]
+#     s = [] 
+#     K = []
+#     l = []
     
-    alpha = 1.0
-    count = 0
-    while J > J_prev# && count < 1#|| z < c1 || z > c2 
-        for k = 1:N-1
-          U_[:,k] = U[:,k] - K[:,:,k]*(X[:,k] - X_prev[:,k]) - alpha*l[:,k]
-          X[:,k+1], Lam[:,k] = f(X[:,k],U_[:,k],dt);
-        end
+#     while k >= 1
+#         S⁺ = S[:,:,k+1]
 
-        J = cost(X,U_,Q,R,Qf,xf)
-        
-        # dV = alpha*v1 + (alpha^2)*v2/2.0
-        dJ = J_prev - J
-        # z = dJ/dV[1]
+#         D = B - C/(G*C)*G*B
+#         M11 = R + D'*S⁺*B
+#         M12 = D'*S⁺*C
+#         M21 = G*B
+#         M22 = G*C
 
-        alpha = alpha/2.0;
-        count += 1
-    end
+#         M = [M11 M12;M21 M22]
+#         b = [D'*S⁺;G]*A
 
-    println("New cost: $J")
-    println("- Line search iters: ", abs(log(.5,alpha)))
-    # println("- Expected improvement: $(dV[1])")
-    println("- Actual improvement: $(dJ)")
-    # println("- (z = $z)\n")
-    return X, U_, J, Lam
-end
+#         K_all = M\b
+#         Ku = K_all[1:m,:]
+#         Kλ = K_all[m+1:m+nc,:]
+#         K[:,:,k] = Ku
 
-function solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,iterations=100,eps=1e-5;control_init="random")
-    N = convert(Int64,floor(tf/dt))
-    X = zeros(size(x0,1),N)
-    
-    if control_init == "random"
-        Random.seed!(0)
-        U = 5.0*rand(m,N-1)
-    else
-        U = zeroes(m,N-1)
-    end
-    U0 = copy(U)
-        
-    X, Lam = rollout(x0,U,f,dt,tf)
-    X0 = copy(X)
-    Lam0 = copy(Lam)
-    J_prev = cost(X,U,Q,R,Qf,xf)
-    println("Initial Cost: $J_prev\n")
-    
-    K = zeros(2,2,2)
-    l = zeros(2,2)
-    for i = 1:iterations
-        println("*** Iteration: $i ***")
-        K, l, v1, v2 = backwardpass(X,Lam,U,F,Q,R,Qf,xf)
-        X, U, J, Lam = forwardpass(X,U,f,J_prev,K,l,v1,v2)
+#         l_all = M\[D'*S⁺;G]*g
+#         lu = l_all[1:m,:]
+#         lλ = l_all[m+1:m+nc,:]
+#         l[:,k] = lu
 
-        if abs(J-J_prev) < eps
-          println("-----SOLVED-----")
-          println("eps criteria met at iteration: $i")
-          break
-        end
-        J_prev = copy(J)
-    end
-    
-    return X, U, K, l, X0, U0, Lam0
-end
-
-X, U, K, l, X0, U0, Lam0 = solve(x0,m,f,getABCG,Q,R,Qf,xf,dt,tf,200,control_init="random");
-
-P = plot(range(0,stop=tf,length=size(X,2)),X[3,:])
-P = plot!(range(0,stop=tf,length=size(X,2)),X[6,:])
+timesteps = 100
+X = repeat(xf,outer=(1,timesteps+1))
+Lam = repeat([0;0.2943],outer=(1,timesteps))
+U = zeros(1,timesteps)
+K, l, v1, v2 = backwardpass(X,Lam,U,getABCG,Q,R,Q,xf)
+K6 = [K[1,6,i] for i=1:timesteps]
+K3 = [K[1,3,i] for i=1:timesteps]
+plot([K3 K6])

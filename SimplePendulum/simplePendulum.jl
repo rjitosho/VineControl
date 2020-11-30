@@ -14,7 +14,7 @@ xf = [pi; 0.] # (ie, swing up)
 #costs
 Q = 0.3*Matrix(I,n,n)
 Qf = 30.0*Matrix(I,n,n)
-R = 0.3*Matrix(I,m,m)
+R = 0.1*Matrix(I,m,m)
 
 #simulation
 dt = 0.03
@@ -214,8 +214,7 @@ function solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,iterations=100,eps=1e-5;control_init="ra
     return X, U, K, l, X0, U0
 end
 
-X_min, U_min, K_min, l_min, X0_min, U0_min = solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,1,control_init="random");
+X_min, U_min, K_min, l_min, X0_min, U0_min = solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,200,control_init="random");
 
 P = plot(range(0,stop=tf,length=size(X_min,2)),X_min[1,:])
 P = plot!(range(0,stop=tf,length=size(X_min,2)),X_min[2,:])
-
