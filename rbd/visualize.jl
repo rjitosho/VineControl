@@ -1,4 +1,4 @@
-using MeshCat, GeometryBasics, CoordinateTransformations, Colors
+using MeshCat, GeometryTypes, GeometryBasics, CoordinateTransformations, Colors
 # using GeometryBasics: HyperRectangle, HyperSphere, Vec, Point, Mesh
 
 function change_units_Z(vine, Z; scale = .001)
@@ -62,8 +62,8 @@ function visualize!(m::SimpleVine3D,Z,dt)
     R = RGBA(1, 0, 0, 1.0)
     B = RGBA(0, 0, 1, 1.0)
     for i = 1:nb
-        setobject!(vis["pp$i"], HyperSphere(GeometryBasics.Point(0.,0.,0.),diam/2), MeshPhongMaterial(color=R))
-        setobject!(vis["pd$i"], HyperSphere(GeometryBasics.Point(0.,0.,0.),diam/2), MeshPhongMaterial(color=R))
+        setobject!(vis["pp$i"], GeometryTypes.HyperSphere(GeometryTypes.Point(0.,0.,0.),diam/2), MeshPhongMaterial(color=R))
+        setobject!(vis["pd$i"], GeometryTypes.HyperSphere(GeometryTypes.Point(0.,0.,0.),diam/2), MeshPhongMaterial(color=R))
     end
 
     anim = MeshCat.Animation(Int(1/dt))
@@ -71,7 +71,7 @@ function visualize!(m::SimpleVine3D,Z,dt)
         atframe(anim, (k-1)) do
             for i = 1:nb
                 CoM = Z[7*(i-1) .+ (1:3), k]
-                r = UnitQuaternion(Z[7*(i-1) .+ (4:7), k])
+                r = UnitQuaternion(Z[7*(i-1) .+ (4:7), k]...)
                 p1 = CoM - r * [0,0,-d]
                 p2 = CoM + r * [0,0,-d]
                 settransform!(vis["pp$i"], Translation(p1...))

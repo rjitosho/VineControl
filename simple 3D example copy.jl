@@ -16,7 +16,7 @@ include("models/SimpleVine3D.jl")
 include("src/visualize.jl")
 
 # Create the model
-model = SimpleVine3D(2, d=100., m_b = .01, J_b = [1.0,1.0,1.0], stiffness = 50000., damping=30000.)
+model = SimpleVine3D(4, d=50., m_b = .01, J_b = [1.0,1.0,1.0], stiffness = 5000., damping=10000.)
 n,m = size(model)
 
 # Generate initial state
@@ -27,13 +27,12 @@ v0 = zeros(model.nv)
 x0 = [q0; v0]
 
 # Rollout dynamics
-N = 401
+N = 1001
 Z = zeros(model.n, N)
 Z[:,1] = [q0;v0]
 U = zeros(model.m, N-1)
-U[1,1:200] = 10000*sin.(collect(1:200)/200*pi)
-U[2,101:300] = 10000*sin.(collect(1:200)/200*pi)
-U[3,201:400] = 10000*sin.(collect(1:200)/200*pi)
+U[1,1:150] = 5000*sin.(collect(1:150)/150*pi)
+U[2,601:750] = 5000*sin.(collect(1:150)/150*pi)
 Lam = zeros(model.nc, N-1)
 dt = .005
 

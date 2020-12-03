@@ -1,5 +1,7 @@
-using TrajectoryOptimization
-using Altro
+# import Pkg; Pkg.activate(@__DIR__); Pkg.instantiate()
+
+# using TrajectoryOptimization
+# using Altro
 using RobotDynamics
 using ForwardDiff
 using LinearAlgebra
@@ -7,7 +9,7 @@ using StaticArrays
 using Plots
 using Rotations
 
-const TO = TrajectoryOptimization
+# const TO = TrajectoryOptimization
 const RD = RobotDynamics
 
 include("models/SimpleVine3D.jl")
@@ -24,22 +26,21 @@ v0 = zeros(model.nv)
 x0 = [q0; v0]
 
 # Rollout dynamics
-N = 2
+N = 2000
 Z = zeros(model.n, N)
 Z[:,1] = [q0;v0]
 U = zeros(model.m, N-1)
-dt = .005
+dt = .001
 
 for k = 2:N
     global Z
-    println("k = $k")
+    print("k = $k\t")
     Z[:,k] = discrete_dynamics(PassThrough, model, SVector{model.n}(Z[:,k-1]),  SVector{model.m}(U[:,k-1]), 0, dt)
-    # println(maximum(abs.(model.c)))
 end
 
 # visualize
-# Z_meters = change_units_Z(model, Z)
-# visualize!(model, Z_meters, dt)
+Z_meters = change_units_Z(model, Z)
+visualize!(model, Z_meters, dt)
 
 # plot y
 plot([Z[2,:] Z[9,:]])
