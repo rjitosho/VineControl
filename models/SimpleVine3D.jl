@@ -131,8 +131,8 @@ function wrenches(model::SimpleVine3D, x, u)
 
     # Base pin
     bend_err, bend_axis, twist_err = bend_error([1.0,0,0,0], q[4:7])
-    # F[4:6] += -model.K[1,1]*bend_err
-    # F[4:6] += -model.C[1,1]*dot(bend_axis, v[4:6])*bend_axis
+    F[4:6] += -model.K[1,1]*bend_err
+    F[4:6] += -model.C[1,1]*dot(bend_axis, v[4:6])*bend_axis
     
     # Other pins
     for i=1:nb-1
@@ -141,16 +141,16 @@ function wrenches(model::SimpleVine3D, x, u)
 
         # Spring
         bend_err, bend_axis, twist_err = bend_error(q[7*(i-1) .+ (4:7)], q[7*i .+ (4:7)])
-        # F[ω1_idx] += model.K[i+1,i+1]*bend_err + 5000*twist_err
-        # F[ω2_idx] += -model.K[i+1,i+1]*bend_err - 5000*twist_err
+        F[ω1_idx] += model.K[i+1,i+1]*bend_err + 5000*twist_err
+        F[ω2_idx] += -model.K[i+1,i+1]*bend_err - 5000*twist_err
 
         # Damping
         ω1 = v[ω1_idx]
         ω2 = v[ω1_idx]
         diff = dot(bend_axis, ω2-ω1)*bend_axis
         twist_diff = (ω2-ω1) - diff
-        # F[ω1_idx] += model.C[i+1,i+1]*diff + 3000*twist_diff
-        # F[ω2_idx] += -model.C[i+1,i+1]*diff - 3000*twist_diff
+        F[ω1_idx] += model.C[i+1,i+1]*diff + 3000*twist_diff
+        F[ω2_idx] += -model.C[i+1,i+1]*diff - 3000*twist_diff
     end
     
     return F
@@ -243,7 +243,7 @@ function RobotDynamics.discrete_dynamics(::Type{PassThrough}, model::SimpleVine3
             println("breaking at iter: $i")
             break
         end
-        i == max_iters && @warn "Max iters reached"
+        i == max_iters && throw("Max iters reached")
         
         # Newton solve
         A = [M -J';

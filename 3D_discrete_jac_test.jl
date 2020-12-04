@@ -12,7 +12,7 @@ const RD = RobotDynamics
 include("models/SimpleVine3D.jl")
 
 # Create the model
-model = SimpleVine3D(2, d=100., m_b = .01, J_b = [1.0,1.0,1.0], stiffness = 50000., damping=30000.)
+model = SimpleVine3D(2, d=100., m_b = .01, J_b = [1.0,1.0,1.0], stiffness = 0*50000., damping=0*30000.)
 n,m = size(model)
 
 # Generate initial state and control
