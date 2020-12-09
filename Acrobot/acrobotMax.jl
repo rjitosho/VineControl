@@ -8,25 +8,17 @@ n = 12 # number of states
 m = 1 # number of controls
 
 #initial and goal conditions
-x0 = [0.; -.5; 0;0;-1.5;0;zeros(6)]
+x0 = [0.; -.5; 0; 0; -1.5; 0; zeros(6)]
 xf = [0.; .5; pi; 0.; 1.5; pi; zeros(6)]
 
-#costs
-Q = zeros(n,n)
-Q[3,3] = 5e-1
-Q[6,6] = 5e-1
-Q[9,9] = 1e-1
-Q[12,12] = 1e-1
-Qf = zeros(n,n)
-Qf[3,3] = 550.
-Qf[6,6] = 500
-Qf[9,9] = 150
-Qf[12,12] = 100
-R = 5e-3*Matrix(I,m,m)
+# costs
+Q = 1e-4*Matrix(I,n,n)
+Qf = 250.0*Matrix(I,n,n)
+R = 1e-4*Matrix(I,m,m)
 
 #simulation
-dt = 0.01
-tf = 3.0
+dt = 0.005
+tf = 5.0
 
 # Maximal dynamics
 function c!(x) 
@@ -57,11 +49,11 @@ function f(x,u,dt)
         # Check break condition
         f = M*(v⁺-v) - J'*λ - F
         # println(norm([f;c]))
-        if norm([f;c]) < 1e-12
+        if norm([f;c]) < 1e-9
             # println("breaking at iter: $i")
             break
         end
-        i == max_iters && throw("Max iters reached")
+        i == max_iters && print("!")#throw("Max iters reached")
 
         # Newton solve
         A = [M -J';
@@ -104,7 +96,7 @@ function getABCG(x⁺,x,u,λ,dt)
     C = ABC[:, n+m+1:end]
 
     J = ForwardDiff.jacobian(c!, x⁺[1:6])
-    G = [zeros(4,6) J]
+    G = [J zeros(4,6)]
     return A,B,C,G
 end
 
@@ -163,7 +155,7 @@ function backwardpass(X,Lam,U,F,Q,R,Qf,xf)
         M21 = G*B
         M22 = G*C
 
-        M = [M11 M12;M21 M22]
+        M = [M11 M12;M21 M22] + mu*I
         b = [D'*S⁺;G]*A
 
         K_all = M\b
@@ -181,10 +173,6 @@ function backwardpass(X,Lam,U,F,Q,R,Qf,xf)
         S[:,:,k] = Q + Ku'*R*Ku + Abar'*S⁺*Abar
         s[:,k] = q - Ku'*r + Ku'*R*lu + Abar'*S⁺*bbar + Abar'*s⁺
 
-        # terms for line search
-        # v1 += (l[:,k]'*Qu[:,:,k])[1]
-        # v2 += (l[:,k]'*Quu[:,:,k]*l[:,k])[1]
-        
         k = k - 1;
     end
     return K, l, v1, v2
@@ -236,7 +224,7 @@ function solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,iterations=100,eps=1e-5;control_init="ra
         Random.seed!(0)
         U = 5.0*rand(m,N-1)
     else
-        U = zeros(m,N-1)
+        U = control_init
     end
     U0 = copy(U)
         
@@ -264,7 +252,16 @@ function solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,iterations=100,eps=1e-5;control_init="ra
     return X, U, K, l, X0, U0, Lam0
 end
 
-X, U, K, l, X0, U0, Lam0 = solve(x0,m,f,getABCG,Q,R,Qf,xf,dt,tf,55,control_init="random");
+X, U, K, l, X0, U0, Lam0 = solve(x0,m,f,getABCG,Q,R,Qf,xf,dt,tf,101,control_init="random");
 
 plot(range(0,stop=tf,length=size(X,2)),X[3:3:end,:]')
 # plot(U')
+
+angle1 = X[3,:]
+angle2 = X[6,:]-X[3,:]
+@show angle1[end]
+@show angle2[end]
+@show maximum(abs.(K[1,:,:]))
+plot(range(0,stop=tf,length=size(X,2)),[angle1 angle2])
+# plot(U')
+# plot(K[1,:,:]',legend=false)
