@@ -15,7 +15,6 @@ xf = [0.; .5; pi; zeros(3)]
 Q = zeros(n,n)
 Q[3,3] = 0.3
 Q[6,6] = 0.3
-# Q = 0.3*Matrix(I,n,n)
 Qf = 100*Q
 R = 0.1*Matrix(I,m,m)
 
@@ -260,7 +259,13 @@ function solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,iterations=100,eps=1e-5;control_init="ra
     return X, U, K, l, X0, U0, Lam0
 end
 
-X, U, K, l, X0, U0, Lam0 = solve(x0,m,f,getABCG,Q,R,Qf,xf,dt,tf,200,control_init="random");
+X, U, K, l, X0, U0, Lam0 = solve(x0,m,f,getABCG,Q,R,Qf,xf,dt,tf,100,control_init="random");
+
+_,N = size(X)
+# K6 = [K[1,3,i] for i=1:N-1]
+# K3 = [K[1,6,i] for i=1:N-1]
+# plot([K3 K6])
 
 P = plot(range(0,stop=tf,length=size(X,2)),X[3,:])
 P = plot!(range(0,stop=tf,length=size(X,2)),X[6,:])
+# plot(U[:])

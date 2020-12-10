@@ -1,6 +1,7 @@
 using ForwardDiff
 using LinearAlgebra
 using Plots
+using Rotations
 using Random
 
 ## Simple Pendulum
@@ -8,32 +9,40 @@ n = 12 # number of states
 m = 1 # number of controls
 
 #initial and goal conditions
-x0 = [0.; 0.; -.5; 1; 0; 0; 0; zeros(6)]
+R0 = UnitQuaternion(.9999,.0001,0, 0)
+x0 = [R0*[0.; 0.; -.5]; Rotations.params(R0); zeros(6)]
 xf = [0.; 0.;  .5; 0; 1; 0; 0; zeros(6)]
 
 #costs
-Q = zeros(n,n)
-Q[4,4] = 0.3
-Q[10,10] = 0.3
+Q = .1*Diagonal([ones(3); zeros(4); ones(6)])
 Qf = 100*Q
-R = 0.3*Matrix(I,m,m)
+R = 0.1*Matrix(I,m,m)
+cost_w = .1
+cost_wf = 10.
 
 #simulation
 dt = 0.03
-tf = 3.0
+tf = 5.0
 
 # Maximal dynamics
-c!(x) = x[1:3] - UnitQuaternion(x[4:7]) * [0;0;-.5]
+c!(x) = [x[1:3] - UnitQuaternion(x[4:7]...) * [0;0;-.5];x[6:7]]
+
+function J!(q⁺)
+    J_big = ForwardDiff.jacobian(c!, q⁺)
+    R⁺ = UnitQuaternion(q⁺[4:7]...)
+    att_jac⁺ = Rotations.∇differential(R⁺)
+    return [J_big[:,1:3] J_big[:,4:7]*att_jac⁺]
+end
 
 nq = 7
 nv = 6
-nc = 3
+nc = 5
 
 function f(x,u,dt)
     m = 1.
     b = 0.1
     g = 9.81
-    M = 1.0*Matrix(I,3,3)
+    M = 1.0*Matrix(I,nv,nv)
 
     q = x[1:nq]
     v = x[nq+1:end]
@@ -42,13 +51,10 @@ function f(x,u,dt)
     q⁺ = copy(q)
     v⁺ = copy(v)
 
-    max_iters = 10
+    max_iters = 100
     for i=1:max_iters      
         c = c!(q⁺)
-        J_big = ForwardDiff.jacobian(c!, q⁺)
-        R⁺ = UnitQuaternion(q⁺[4:7])
-        att_jac⁺ = Rotations.∇differential(R⁺)
-        J = [J_big[:,1:3] J_big[:,4:7]*att_jac⁺]
+        J = J!(q⁺)
         F = [0;0;-m*g; u[1]-b*v⁺[4];0;0] * dt
 
         # Check break condition
@@ -60,8 +66,9 @@ function f(x,u,dt)
         end
         i == max_iters && @warn "Max iters reached"
 
-        quat⁺(ω⁺) = Rotations.params(Rotations.expm(ω⁺*dt) * R)
+        quat⁺(ω⁺) = Rotations.params(Rotations.expm(ω⁺*dt) * UnitQuaternion(q[4:7]...))
         dq_dv = Matrix(dt*I, nv, nv)
+        att_jac⁺ = Rotations.∇differential(UnitQuaternion(q⁺[4:7]...))
         dq_dv[4:6,4:6] = att_jac⁺'*ForwardDiff.jacobian(quat⁺, v⁺[4:6])
         
         # Newton solve
@@ -74,9 +81,9 @@ function f(x,u,dt)
         # Update        
         v⁺ = sol[1:nv]
         λ = sol[nv+1:end]
-        q⁺ = q + v⁺*dt
+        q⁺ = [q[1:3]+v⁺[1:3]*dt; quat⁺(v⁺[4:6])]
     end
-    return [q⁺[1:3]; quat⁺(v⁺[4:6]); v⁺], λ 
+    return [q⁺; v⁺], λ 
 end
 
 function getABCG(x⁺,x,u,λ,dt)
@@ -89,36 +96,64 @@ function getABCG(x⁺,x,u,λ,dt)
         u = z[2*(nq+nv) .+ (1:m)]
         λ = z[2*(nq+nv)+m .+ (1:nc)]
     
-        M = 1.0*Matrix(I,3,3)
+        M = 1.0*Matrix(I,6,6)
         b = 0.1
         
-        J_big = ForwardDiff.jacobian(c!, q⁺)
-        R⁺ = UnitQuaternion(q⁺[4:7])
-        att_jac⁺ = Rotations.∇differential(R⁺)
-        J = [J_big[:,1:3] J_big[:,4:7]*att_jac⁺]
+        J = J!(q⁺)
         F = [0;0;-9.81; u[1]-b*v⁺[4];0;0] * dt
-        return [M*(v⁺-v) - (J'*λ + F); q⁺ - (q + v⁺*dt)]
+
+        ω⁺ = v⁺[4:6]
+        quat⁺ = Rotations.params(Rotations.expm(ω⁺*dt) * UnitQuaternion(q[4:7]...))
+
+        return [M*(v⁺-v) - (J'*λ + F); q⁺ - [q[1:3]+v⁺[1:3]*dt; quat⁺]]
     end
 
-    n = length(x)
+    n = 12#length(x)
     m = length(u)
     
     all_partials = ForwardDiff.jacobian(f_imp, [x⁺;x;u;λ])
-    ABC = -all_partials[:,1:6]\all_partials[:,7:end]
-    A = ABC[:, 1:n]
-    B = ABC[:, n .+ (1:m)]
-    C = ABC[:, n+m+1:end]
+    ABC = -all_partials[:,1:n]\all_partials[:,n+1:end]
 
-    J = ForwardDiff.jacobian(c!, x⁺[1:3])
-    G = [zeros(2,3) J]
+    att_jac = Rotations.∇differential(UnitQuaternion(x[4:7]...))
+    att_jac⁺ = Rotations.∇differential(UnitQuaternion(x⁺[4:7]...))
+
+    ABC′ = zeros(2*nv,n+m+nc)
+    ABC′[1:3, :] = ABC[1:3, :]
+    ABC′[4:6, :] = att_jac⁺'*ABC[4:7, :]
+    ABC′[nv .+ (1:nv), :] = ABC[nq .+ (1:nv), :]
+
+    A_big = ABC′[:, 1:(nq+nv)]
+    B = ABC′[:, nq+nv .+ (1:m)]
+    C = ABC′[:, nq+nv+m .+ (1:nc)]
+
+    A = zeros(2*nv,2*nv)
+    A[:, 1:3] =  A_big[:, 1:3]
+    A[:, 4:6] = A_big[:, 4:7]*att_jac
+    A[:, nv .+ (1:nv)] = A_big[:, nq .+ (1:nv)]
+
+    J = J!(x⁺)
+    G = [J zeros(size(J))]
     return A,B,C,G
+end
+
+
+function state_error(x,x0)
+    err = zeros(2*nv)
+    dx = x-x0
+    for i=1:1
+        err[6*(i-1) .+ (1:3)] = dx[7*(i-1) .+ (1:3)]
+        dq = UnitQuaternion(x[7*(i-1) .+ (4:7)]...) ⊖ UnitQuaternion(x0[7*(i-1) .+ (4:7)]...)
+        err[6*(i-1) .+ (4:6)] = dq[:]
+    end
+    err[nv .+ (1:nv)] = dx[nq .+ (1:nv)]
+    return err
 end
 
 #iLQR
 function rollout(x0,U,f,dt,tf)
     N = convert(Int64,floor(tf/dt))
     X = zeros(size(x0,1),N)
-    Lam = zeros(2,N-1)
+    Lam = zeros(nc,N-1)
     X[:,1] = x0
     for k = 1:N-1
         # print("k = $k ")
@@ -131,33 +166,53 @@ function cost(X,U,Q,R,Qf,xf)
     N = size(X,2)
     J = 0.0
     for k = 1:N-1
-      J += 0.5*(X[:,k] - xf)'*Q*(X[:,k] - xf) + 0.5*U[:,k]'*R*U[:,k]
+        # dx = state_error(X[:,k], xf)
+        dx = X[:,k] - xf
+        J += 0.5*dx'*Q*dx + 0.5*U[:,k]'*R*U[:,k]
+        q = X[4:7,k]
+        dq = xf[4:7]'q
+        J += .1*min(1+dq, 1-dq)
     end
-    J += 0.5*(X[:,N] - xf)'*Qf*(X[:,N] - xf)
+    # dx = state_error(X[:,N], xf)
+    dx = X[:,N] - xf
+    J += 0.5*dx'*Qf*dx
+    q = X[4:7,N]
+    dq = xf[4:7]'q
+    J += .1*min(1+dq, 1-dq)
     return J
 end
 
-function backwardpass(X,Lam,U,F,Q,R,Qf,xf)
-    n, N = size(X)
-    m = size(U,1)
-    nc = 2
+function compute_Qq(Q, x, xf)
+    n = 12
+    Q_ = Q[1,1]*Matrix(I,n,n)
+    Q_[4:6,4:6] = abs(xf[4:7]'x[4:7])*Matrix(I,3,3)
     
+    q_ = Q*(x - xf)
+    deleteat!(q_,4)
+    att_jac = Rotations.∇differential(UnitQuaternion(x[4:7]))
+    q_[4:6] = att_jac'*xf[4:7]
+    return Q_, q_
+end
+
+function backwardpass(X,Lam,U,F,Q,R,Qf,xf)
+    Q_og = Q
+    _, N = size(X)
+    n = 12
+    m = size(U,1)
+
     S = zeros(n,n,N)
     s = zeros(n,N)    
     K = zeros(m,n,N-1)
     l = zeros(m,N-1)
     
-    S[:,:,N] = Qf
-    s[:,N] = Qf*(X[:,N] - xf)
-    v1 = 0.0
-    v2 = 0.0
-
+    S[:,:,N], s[:,N] = compute_Qq(Qf, X[:,N], xf)
+    
     mu = 0.0
     k = N-1
     
     while k >= 1
-        q = Q*(X[:,k] - xf)
-        r = R*(U[:,k])
+        Q, q = compute_Qq(Q_og, X[:,k], xf)
+        r = R*U[:,k]
         S⁺ = S[:,:,k+1]
         s⁺ = s[:,k+1]
         
@@ -176,9 +231,8 @@ function backwardpass(X,Lam,U,F,Q,R,Qf,xf)
         Ku = K_all[1:m,:]
         Kλ = K_all[m+1:m+nc,:]
         K[:,:,k] = Ku
-        @show Ku
 
-        l_all = M\[r;zeros(nc)]
+        l_all = M\[r + D'*s⁺; zeros(nc)]
         lu = l_all[1:m,:]
         lλ = l_all[m+1:m+nc,:]
         l[:,k] = lu
@@ -188,52 +242,40 @@ function backwardpass(X,Lam,U,F,Q,R,Qf,xf)
         S[:,:,k] = Q + Ku'*R*Ku + Abar'*S⁺*Abar
         s[:,k] = q - Ku'*r + Ku'*R*lu + Abar'*S⁺*bbar + Abar'*s⁺
 
-        # terms for line search
-        # v1 += (l[:,k]'*Qu[:,:,k])[1]
-        # v2 += (l[:,k]'*Quu[:,:,k]*l[:,k])[1]
-        
         k = k - 1;
     end
-    return K, l, v1, v2
+    return K, l
 end
 
-function forwardpass(X,U,f,J,K,l,v1,v2,c1=0.0,c2=1.0)
+function forwardpass(X,U,f,J,K,l)
     N = size(X,2)
     m = size(U,1)
-    Lam = zeros(2,N-1)
+    Lam = zeros(nc,N-1)
     X_prev = copy(X)
     J_prev = copy(J)
     U_ = zeros(m,N-1)
     J = Inf
-    dV = 0.0
     dJ = 0.0
-    z = 0.0
     
     alpha = 1.0
-    count = 0
-    while J > J_prev# && count < 1#|| z < c1 || z > c2 
+    while J > J_prev
         for k = 1:N-1
-          U_[:,k] = U[:,k] - K[:,:,k]*(X[:,k] - X_prev[:,k]) - alpha*l[:,k]
-          X[:,k+1], Lam[:,k] = f(X[:,k],U_[:,k],dt);
+            dx = state_error(X[:,k], X_prev[:,k])
+            U_[:,k] = U[:,k] - K[:,:,k]*dx - alpha*l[:,k]
+            X[:,k+1], Lam[:,k] = f(X[:,k],U_[:,k],dt);
         end
 
         J = cost(X,U_,Q,R,Qf,xf)
-        
-        # dV = alpha*v1 + (alpha^2)*v2/2.0
         dJ = J_prev - J
-        # z = dJ/dV[1]
-
         alpha = alpha/2.0;
-        count += 1
     end
 
     println("New cost: $J")
     println("- Line search iters: ", abs(log(.5,alpha)))
-    println("- Expected improvement: $(dV[1])")
     println("- Actual improvement: $(dJ)")
-    println("- (z = $z)\n")
     return X, U_, J, Lam
 end
+
 
 function solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,iterations=100,eps=1e-5;control_init="random")
     N = convert(Int64,floor(tf/dt))
@@ -243,7 +285,7 @@ function solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,iterations=100,eps=1e-5;control_init="ra
         Random.seed!(0)
         U = 5.0*rand(m,N-1)
     else
-        U = zeroes(m,N-1)
+        U = zeros(m,N-1)
     end
     U0 = copy(U)
         
@@ -257,8 +299,8 @@ function solve(x0,m,f,F,Q,R,Qf,xf,dt,tf,iterations=100,eps=1e-5;control_init="ra
     l = zeros(2,2)
     for i = 1:iterations
         println("*** Iteration: $i ***")
-        K, l, v1, v2 = backwardpass(X,Lam,U,F,Q,R,Qf,xf)
-        X, U, J, Lam = forwardpass(X,U,f,J_prev,K,l,v1,v2)
+        K, l = backwardpass(X,Lam,U,F,Q,R,Qf,xf)
+        X, U, J, Lam = forwardpass(X,U,f,J_prev,K,l)
 
         if abs(J-J_prev) < eps
           println("-----SOLVED-----")
@@ -274,27 +316,20 @@ end
 function stable_rollout(Ku,x0,u0,f,dt,tf)
     N = convert(Int64,floor(tf/dt))
     X = zeros(size(x0,1),N)
-    U = zeros(1,N-1)
-    Lam = zeros(2,N-1)
+    U = zeros(m,N-1)
+    Lam = zeros(nc,N-1)
     X[:,1] = x0
     for k = 1:N-1
-        U[k] = (u0-Ku*(X[:,k]-xf))[1]
+        dx = state_error(X[:,k], xf)
+        U[:,k] = u0-Ku*dx
         X[:,k+1], Lam[:,k] = f(X[:,k],U[:,k],dt)
     end
     return X, Lam, U
 end
 
-timesteps = 100
-X = repeat(xf,outer=(1,timesteps+1))
-Lam = repeat([0;0.2943],outer=(1,timesteps))
-U = .5/sqrt(2)*9.81*ones(1,timesteps)
-K, l, v1, v2 = backwardpass(X,Lam,U,getABCG,Q,R,Q,xf)
-K6 = [K[1,6,i] for i=1:timesteps]
-K3 = [K[1,3,i] for i=1:timesteps]
-plot([K3 K6])
+X, Lam = rollout(x0,1.7*U_opt,f,dt,tf)
 
-Ku = K[:,:,1]
-xf = [.25*sqrt(2);.25*sqrt(2);3*pi/4;zeros(3)]
-x1, _ = f(xf,[1.],dt)
-X, Lam, U=stable_rollout(Ku,x1,U[:,1],f,dt,tf)
-plot(X[3,:])
+quats = [UnitQuaternion(X[4:7,i]) for i=1:N]
+angles = [rotation_angle(quats[i])*rotation_axis(quats[i])[1] for i=1:N]
+plot(angles)
+plot!(X[10,:])
